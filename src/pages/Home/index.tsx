@@ -1,9 +1,10 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { useTasks } from "../../hooks/useTasks";
 import TaskForm from "../../components/TaskForm";
 import TaskList from "../../components/TaskList";
 import ThemeToggler from "../../components/ThemeToggler";
 import "./styles.css";
+import { TaskData } from "../../models/Task";
 
 const Home: React.FC = () => {
   const {
@@ -15,6 +16,16 @@ const Home: React.FC = () => {
     deleteTask,
     toggleTaskCompletion,
   } = useTasks();
+  const [query, setQuery] = useState("");
+  const [filteredTasks, setFilteredTasks] = useState<TaskData[]>([]);
+
+  useEffect(() => {
+    if (!tasks.data) return;
+   
+    setFilteredTasks(tasks.data?.filter((task) =>
+      task.title.toLowerCase().includes(query.toLowerCase())
+    ))
+  }, [query, tasks.data]);
 
   if (isLoading) return <p>Loading tasks...</p>;
   if (error) return <p>Error: {error.message}</p>;
@@ -27,11 +38,18 @@ const Home: React.FC = () => {
         <ThemeToggler />
       </div>
 
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="search"
+      />
+
       <TaskForm onSubmit={addTask} />
 
-      {tasks.data && (
+      {filteredTasks && (
         <TaskList
-          tasks={tasks.data}
+          tasks={filteredTasks}
           onDelete={deleteTask}
           onToggle={toggleTaskCompletion}
           onEdit={editTask}
