@@ -5,85 +5,103 @@ import { GeoLocation } from "../models/GeoLocation";
 export const useGeolocation = (): GeoLocation | null => {
   const [location, setLocation] = useState<GeoLocation | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isInitialMount = useRef(true);
 
-  // Fetch the user's current geolocation
-  const fetchLocation = () => {
+  const getStoredLocation = (): GeoLocation | null => {
+    try {
+      const stored = localStorage.getItem(GEOLOCATION_LOCAL_STORAGE_KEY);
+      if (!stored) return null;
+
+      const storedLocation: GeoLocation = JSON.parse(stored);
+      const isExpired = Date.now() - storedLocation.timestamp > TEN_MINUTES;
+      if (!isExpired) {
+        return storedLocation;
+      }
+    } catch (error) {
+      console.error("Error reading stored location:", error);
+    }
+    return null;
+  };
+
+  const fetchLocation = async (): Promise<void> => {
     if (!navigator.geolocation) {
       console.error("Geolocation is not supported by your browser");
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const newLocation: GeoLocation = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-          timestamp: Date.now(),
-        };
-
-        // Update the state and local storage
-        setLocation(newLocation);
-        localStorage.setItem(
-          GEOLOCATION_LOCAL_STORAGE_KEY,
-          JSON.stringify(newLocation)
-        );
-
-        // Clear the existing interval and restart it
-        if (intervalRef.current) clearInterval(intervalRef.current);
-        startInterval();
-      },
-      (error) => {
-        console.error("Error fetching geolocation:", error);
-
-        // Fallback to the last valid geolocation
-        const stored = localStorage.getItem(GEOLOCATION_LOCAL_STORAGE_KEY);
-        if (stored) {
-          const storedLocation: GeoLocation = JSON.parse(stored);
-          if (Date.now() - storedLocation.timestamp < TEN_MINUTES) {
-            setLocation(storedLocation);
-          } else {
-            console.error("Last valid geolocation is expired");
-          }
+    try {
+      const position = await new Promise<GeolocationPosition>(
+        (resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            timeout: 1000,
+            maximumAge: TEN_MINUTES,
+            enableHighAccuracy: false,
+          });
         }
-      },
-      { timeout: 10000 } // 10 seconds timeout
-    );
-  };
+      );
 
-  // Start the interval to check for expired geolocation
-  const startInterval = () => {
-    intervalRef.current = setInterval(() => {
-      if (location && Date.now() - location.timestamp > TEN_MINUTES) {
-        fetchLocation(); // Fetch a new geolocation if the current one is expired
+      const newLocation: GeoLocation = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        timestamp: Date.now(),
+      };
+      setLocation(newLocation);
+      localStorage.setItem(
+        GEOLOCATION_LOCAL_STORAGE_KEY,
+        JSON.stringify(newLocation)
+      );
+    } catch (error) {
+      console.error("Error fetching geolocation:", error);
+      // Only fall back to stored location if we don't have a current location
+      if (!location) {
+        const storedLocation = getStoredLocation();
+        if (storedLocation) {
+          setLocation(storedLocation);
+        }
       }
-    }, TEN_MINUTES);
+    }
   };
 
-  // Initialize the hook
   useEffect(() => {
-    const stored = localStorage.getItem(GEOLOCATION_LOCAL_STORAGE_KEY);
-    if (stored) {
-      const storedLocation: GeoLocation = JSON.parse(stored);
-
-      // Use the stored location if it's still valid
-      if (Date.now() - storedLocation.timestamp < TEN_MINUTES) {
+    const initializeLocation = async () => {
+      // Try to get stored location first
+      const storedLocation = getStoredLocation();
+      if (storedLocation) {
         setLocation(storedLocation);
-      } else {
-        fetchLocation(); // Fetch a new location if the stored one is expired
       }
-    } else {
-      fetchLocation(); // Fetch a new location if no stored location exists
+
+      // Set up periodic location updates
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+
+      // Only fetch immediately if we don't have a valid stored location
+      if (!storedLocation) {
+        await fetchLocation();
+      }
+
+      intervalRef.current = setInterval(() => {
+        const locationAge = location
+          ? Date.now() - location.timestamp
+          : Infinity;
+        if (locationAge > TEN_MINUTES) {
+          fetchLocation();
+        }
+      }, 30000);
+    };
+
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      initializeLocation();
     }
 
-    // Start the interval
-    startInterval();
-
-    // Cleanup the interval on unmount
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [location]);
 
   return location;
 };
